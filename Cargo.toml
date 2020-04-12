@@ -1,0 +1,9 @@
+[package]
+name = "hrs3300-core"
+version = "0.1.0"
+authors = ["Todd Stellanova <tstellanova@users.noreply.github.com>"]
+edition = "2018"
+
+
+[dependencies]
+embedded-hal = "0.2"
