@@ -53,6 +53,7 @@ where
             i2c_port,
             address,
             adc_resolution,
+            resolution_mask: 0
         }
     }
 
