@@ -53,7 +53,7 @@ where
             i2c_port,
             address,
             adc_resolution,
-            resolution_mask: 0
+            resolution_mask: 0,
         }
     }
 
@@ -83,8 +83,8 @@ where
         let pdrive_reg_val = (PDriverRegField::PDRIVE0 as u8 | PDriverRegField::PON as u8)
             | Self::RESERVED_PDRIVE_BITS; //0x68  rec
         self.write_register(Register::PDRIVER, pdrive_reg_val)?;
-        let resolution_reg_val = (self.adc_resolution as u8) | Self::RESERVED_RESOLUTION_BITS; // 0x66 rec
-        self.write_register(Register::RES, resolution_reg_val)?;
+        //flush resolution setting to the sensor
+        self.set_adc_resolution(self.adc_resolution)?;
         self.write_register(Register::HGAIN, 0x10)?; // 0x10 rec
         let enable_reg_val = (EnableRegField::HEN as u8 | EnableRegField::PDRIVE1 as u8)
             | Self::RESERVED_ENABLE_BITS;
@@ -122,10 +122,8 @@ where
         self.adc_resolution = resolution;
         self.resolution_mask = (1 << (8 + (self.adc_resolution as u32))) - 1;
 
-        let res = Self::RESERVED_RESOLUTION_BITS & (resolution as u8);
-        // let res = self.read_register(Register::RES)?;
-        // let res = (res & 0xF0) | (resolution as u8);
-        self.write_register(Register::RES, res)
+        let resolution_reg_val = (self.adc_resolution as u8) | Self::RESERVED_RESOLUTION_BITS; // 0x66 rec
+        self.write_register(Register::RES, resolution_reg_val)
     }
 
     /// Read a sample from the sensors,
