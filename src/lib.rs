@@ -2,19 +2,21 @@
 
 use core::fmt::Debug;
 
-use embedded_hal as hal;
 use crate::Error::DeviceId;
+use embedded_hal as hal;
+
+#[allow(unused)]
+mod definitions;
+use definitions::{AdcResolution, EnableRegField, PDriverRegField, Register};
 
 /// Errors in this crate
 #[derive(Debug)]
 pub enum Error<CommE> {
     Comm(CommE),
 
+    /// The device ID read from the device is unrecognized
     DeviceId,
-    GenericError,
 }
-
-
 
 #[derive(Debug)]
 pub struct HRS3300<I2C> {
@@ -31,10 +33,9 @@ type AmbientLightType = LuminanceType;
 type ReflectedLightType = LuminanceType;
 
 impl<I2C, CommE> HRS3300<I2C>
-    where
-        I2C: hal::blocking::i2c::Write<Error = CommE>
-        + hal::blocking::i2c::WriteRead<Error = CommE>,
-        CommE: core::fmt::Debug
+where
+    I2C: hal::blocking::i2c::Write<Error = CommE> + hal::blocking::i2c::WriteRead<Error = CommE>,
+    CommE: core::fmt::Debug,
 {
     pub const DEFAULT_DEVICE_ADDRESS: u8 = 0x44;
     /// recommended value of reserved resolution bits
@@ -49,7 +50,11 @@ impl<I2C, CommE> HRS3300<I2C>
     }
 
     pub fn default(i2c_port: I2C) -> Self {
-        Self::new(i2c_port, Self::DEFAULT_DEVICE_ADDRESS, AdcResolution::Bits14 )
+        Self::new(
+            i2c_port,
+            Self::DEFAULT_DEVICE_ADDRESS,
+            AdcResolution::Bits14,
+        )
     }
 
     pub fn init(&mut self) -> Result<(), Error<CommE>> {
@@ -66,19 +71,43 @@ impl<I2C, CommE> HRS3300<I2C>
         // Enable
         //TODO subdivide these raw register configs into finer-grained control
         // we currently set the configuration values according to datasheet recommendations
-        self.write_register(Register::PDRIVER, 0x68)?;
-        self.set_adc_resolution(self.adc_resolution)?;
+        let pdrive_reg_val = PDriverRegField::PDRIVE0 as u8 | PDriverRegField::PON as u8;
+        self.write_register(Register::PDRIVER, pdrive_reg_val)?;
+        self.write_register(Register::RES, 0x66)?;
+        //TODO self.set_adc_resolution(self.adc_resolution)?;
         self.write_register(Register::HGAIN, 0x10)?;
-        self.write_register(Register::ENABLE,0x68)?;
+        // enable and set conversion time to 12.5 ms
+        let enable_reg_val = EnableRegField::HEN as u8 | EnableRegField::PDRIVE1 as u8 | 0x60;
+        self.write_register(Register::ENABLE, enable_reg_val)?;
         Ok(())
     }
 
-    pub fn get_device_id( &mut self) -> Result<u8,  Error<CommE>> {
+    pub fn enable(&mut self, enable: bool) -> Result<(), Error<CommE>> {
+        let enable_val = self.read_register(Register::ENABLE)?;
+        let enable_val = if enable {
+            enable_val | (EnableRegField::HEN as u8)
+        } else {
+            enable_val & !(EnableRegField::HEN as u8)
+        };
+        self.write_register(Register::ENABLE, enable_val)?;
+
+        let pdrive_val = self.read_register(Register::PDRIVER)?;
+        let pdrive_val = if enable {
+            pdrive_val | (PDriverRegField::PON as u8)
+        } else {
+            pdrive_val & !(PDriverRegField::PON as u8)
+        };
+        self.write_register(Register::PDRIVER, pdrive_val)?;
+
+        Ok(())
+    }
+
+    pub fn get_device_id(&mut self) -> Result<u8, Error<CommE>> {
         let device_id = self.read_register(Register::ID)?;
         Ok(device_id)
     }
 
-    pub fn set_adc_resolution(&mut self, resolution: AdcResolution) -> Result<(),  Error<CommE>> {
+    pub fn set_adc_resolution(&mut self, resolution: AdcResolution) -> Result<(), Error<CommE>> {
         self.adc_resolution = resolution;
         let res = Self::RESERVED_RESOLUTION_BITS & (resolution as u8);
         // let res = self.read_register(Register::RES)?;
@@ -86,11 +115,13 @@ impl<I2C, CommE> HRS3300<I2C>
         self.write_register(Register::RES, res)
     }
 
-    pub fn enable_power(&mut self, enable: bool) -> Result<(),  Error<CommE>> {
+    pub fn enable_power(&mut self, enable: bool) -> Result<(), Error<CommE>> {
         let base = self.read_register(Register::ENABLE)?;
-        let new_val =
-            if enable { base | (EnableRegField::HEN as u8) }
-            else { base & !(EnableRegField::HEN as u8)};
+        let new_val = if enable {
+            base | (EnableRegField::HEN as u8)
+        } else {
+            base & !(EnableRegField::HEN as u8)
+        };
         self.write_register(Register::ENABLE, new_val)
     }
 
@@ -100,10 +131,10 @@ impl<I2C, CommE> HRS3300<I2C>
     /// Returns a heart rate measurement if one can be estimated
     /// from the time-series data available.
     ///
-    pub fn sample_one(&mut self) -> Result<Option<HeartRateType>,  Error<CommE>> {
+    pub fn sample_one(&mut self) -> Result<Option<HeartRateType>, Error<CommE>> {
         let _raw_sample = self.read_raw_sample()?;
         // TODO filter raw samples, detect peaks, return valid heart rate if known
-       Ok(None)
+        Ok(None)
     }
 
     /// Read a raw sample from the sensors
@@ -111,7 +142,9 @@ impl<I2C, CommE> HRS3300<I2C>
     /// - HRS has units of the reflected light type,
     /// - ALS has units of the ambient light
     /// These units are undocumented but we assume they're the same (luminance or equivalent)
-    pub fn read_raw_sample(&mut self) -> Result<(ReflectedLightType, AmbientLightType),  Error<CommE>>  {
+    pub fn read_raw_sample(
+        &mut self,
+    ) -> Result<(ReflectedLightType, AmbientLightType), Error<CommE>> {
         let block = self.read_sample_block()?;
         // The order of returned data is:
         // 0: C1DATAM
@@ -122,15 +155,15 @@ impl<I2C, CommE> HRS3300<I2C>
         // 5: C1DATAL
         // 6: C0DATAL
 
-        let mut c1: u32 = (block[0] as u32) << 3;// 7:0 -> C1DATA[10:3]
-        let mut c0: u32 = (block[1] as u32) << 8;// 7:0 -> C0DATA[15:8]
-        c0 |= ((block[2] & 0b1111) as u32) << 4;// 3:0 -> C0DATA[7:4]
-        c1 |= ((block[4] & 0b111111) as u32) << 11;//  6:0 -> C1DATA[17:11]
-        c1 |= (block[5] & 0b111) as u32;// 2:0 -> C1DATA[2:0]
-        c0 |= ((block[6] & 0b110000) as u32) << 16;// 5:4 -> C0DATA[17:16]
-        c0 |= (block[6] & 0b1111) as u32;// 3:0 -> C0DATA[3:0]
-        // c0 is HRS reflectance / absorption
-        // c1 is ambient light sensor (luminance)
+        let mut c1: u32 = (block[0] as u32) << 3; // 7:0 -> C1DATA[10:3]
+        let mut c0: u32 = (block[1] as u32) << 8; // 7:0 -> C0DATA[15:8]
+        c0 |= ((block[2] & 0b1111) as u32) << 4; // 3:0 -> C0DATA[7:4]
+        c1 |= ((block[4] & 0b111111) as u32) << 11; //  6:0 -> C1DATA[17:11]
+        c1 |= (block[5] & 0b111) as u32; // 2:0 -> C1DATA[2:0]
+        c0 |= ((block[6] & 0b110000) as u32) << 16; // 5:4 -> C0DATA[17:16]
+        c0 |= (block[6] & 0b1111) as u32; // 3:0 -> C0DATA[3:0]
+                                          // c0 is HRS reflectance / absorption
+                                          // c1 is ambient light sensor (luminance)
 
         Ok((c0 as ReflectedLightType, c1 as AmbientLightType))
     }
@@ -144,7 +177,7 @@ impl<I2C, CommE> HRS3300<I2C>
     /// C1DATAH = 0x0D, 6:0 -> C1DATA[17:11]
     /// C1DATAL = 0x0E, 2:0 -> C1DATA[2:0]
     /// C0DATAL = 0x0F, 5:4 -> C0DATA[17:16], 3:0 -> C0DATA[3:0]
-    fn read_sample_block(&mut self) -> Result<[u8;SAMPLE_BLOCK_LEN],  Error<CommE>>  {
+    fn read_sample_block(&mut self) -> Result<[u8; SAMPLE_BLOCK_LEN], Error<CommE>> {
         //
         let mut sample_buf = [0u8; SAMPLE_BLOCK_LEN];
         // read multiple registers starting at C1DATAM
@@ -152,20 +185,20 @@ impl<I2C, CommE> HRS3300<I2C>
         Ok(sample_buf)
     }
 
-    fn read_register(&mut self, register: Register) -> Result<u8,  Error<CommE>> {
+    fn read_register(&mut self, register: Register) -> Result<u8, Error<CommE>> {
         let mut data = [0];
         self.read_registers(register, data.as_mut())?;
         Ok(data[0])
     }
 
-    fn write_register(&mut self, register: Register, value: u8) -> Result<(),  Error<CommE>> {
+    fn write_register(&mut self, register: Register, value: u8) -> Result<(), Error<CommE>> {
         self.i2c_port
             .write(self.address, &[register as u8, value])
             .map_err(Error::Comm)
     }
 
     /// Read one or more registers at once, beginning at the start register
-    fn read_registers(&mut self, start: Register, buf: &mut [u8]) -> Result<(),  Error<CommE>> {
+    fn read_registers(&mut self, start: Register, buf: &mut [u8]) -> Result<(), Error<CommE>> {
         self.i2c_port
             .write_read(self.address, &[start as u8], buf)
             .map_err(Error::Comm)?;
@@ -176,78 +209,6 @@ impl<I2C, CommE> HRS3300<I2C>
 const SAMPLE_BLOCK_LEN: usize = 7;
 
 const DEFAULT_DEVICE_ID: u8 = 0x21;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(u8)]
-pub enum AdcResolution {
-    Bits8 = 0,
-    Bits9 = 1,
-    Bits10 = 2,
-    Bits11 = 3,
-    Bits12 = 4,
-    Bits13 = 5,
-    Bits14 = 6,
-    Bits15 = 7,
-    Bits16 = 8,
-    Bits17 = 9,
-    Bits18 = 10,
-}
-
-/// Registers described in the data sheet for this device
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(u8)]
-enum Register {
-    ID = 0x00, // device ID: s/b 0x21
-    ENABLE = 0x01, // Enable HRS (rec:  0x68)
-    C1DATAM = 0x08,
-    C0DATAM = 0x09,
-    C0DATAH = 0x0A, // CH0 data register bit 7~4
-    PDRIVER = 0x0C, // HRS LED driver/PON/PDRIVE[0]  (rec: 0x68)
-    C1DATAH = 0x0D, // CH1 data register bit 17~11
-    C1DATAL = 0x0E, // CH1 data register bit 2~0
-    C0DATAL = 0x0F, // CH1 data register bit 17~16 and 3~0
-    RES =  0x16, // ALS and HRS (ADC) resolution (rec: 0x66)
-    HGAIN  = 0x17, // HRS gain
-}
-
-/// Fields from ENABLE Register(0x01)
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(u8)]
-enum EnableRegField {
-    /// HRS enable
-    HEN = 1 << 7,
-    /// HRS wait time
-    HWT = 0b111 << 4,
-    /// LED drive current setup
-    PDRIVE1 = 1 << 3,
-}
-
-/// Fields from HRS LED Driver Set Register (0x0C)
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(u8)]
-enum PDriverRegField {
-    /// Used for LED drive current setup
-    PDRIVE0 = 1 << 6,
-    /// Write 1 active OSC, write 0 disable OSC. Generate PD signal to analog(0 for work, 1 for Power down)
-    PON = 1 << 5,
-}
-
-/// Fields from RESOLUTION Register (0x16)
-#[allow(non_camel_case_types)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(u8)]
-enum ResRegField {
-    /// ALS ADC resolution. Generate TSEL to analog in ALS mode
-    ALS_RES = 0b1111,
-}
-
-/// Fields from HGAIN Register(0x17)
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(u8)]
-enum HgainRegField {
-    /// HRS gain
-    HGAIN = 0b111 << 2,
-}
 
 #[cfg(test)]
 mod tests {

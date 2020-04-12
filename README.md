@@ -19,6 +19,7 @@ This is work-in-progress
 - [ ] Blocking mode read of raw sensor data
 - [ ] Smoothing / filtering of sensor data
 - [ ] Processing sensor data into heart rate measurement
+- [ ] Allow adjustment of sample interval
 - [ ] Example for running on PineTime hardware
 - [ ] CI
 - [ ] Documentation
