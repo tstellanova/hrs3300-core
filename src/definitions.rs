@@ -40,7 +40,7 @@ pub enum EnableRegField {
     /// HRS wait time
     HWT = 0b111 << 4,
     /// Used for LED drive current setup
-    PDRIVE1 = 1 << 3,
+    PDRIVE1 = 0b1000,
 }
 
 /// Fields from HRS LED Driver Set Register (0x0C)

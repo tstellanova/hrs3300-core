@@ -71,14 +71,16 @@ where
         // Enable
         //TODO subdivide these raw register configs into finer-grained control
         // we currently set the configuration values according to datasheet recommendations
-        let pdrive_reg_val = PDriverRegField::PDRIVE0 as u8 | PDriverRegField::PON as u8;
+        let pdrive_reg_val = 0x68 ; //PDriverRegField::PDRIVE0 as u8 | PDriverRegField::PON as u8;
         self.write_register(Register::PDRIVER, pdrive_reg_val)?;
         self.write_register(Register::RES, 0x66)?;
         //TODO self.set_adc_resolution(self.adc_resolution)?;
         self.write_register(Register::HGAIN, 0x10)?;
         // enable and set conversion time to 12.5 ms
-        let enable_reg_val = EnableRegField::HEN as u8 | EnableRegField::PDRIVE1 as u8 | 0x60;
+        let enable_reg_val = (EnableRegField::HEN as u8 | EnableRegField::PDRIVE1 as u8) | 0x60;
         self.write_register(Register::ENABLE, enable_reg_val)?;
+
+        // self.enable(true)?;
         Ok(())
     }
 

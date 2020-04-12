@@ -50,7 +50,7 @@ fn main() -> ! {
 
     let mut valid_samples = 0;
     rprintln!("\r\n--- DATA >>> ---");
-    for _tick in 0..1_000 {
+    for _tick in 0..500 {
         if let Ok((c0data, c1data)) = hrs.read_raw_sample() {
             rprintln!("{}, {}", c0data, c1data);
             valid_samples += 1;
