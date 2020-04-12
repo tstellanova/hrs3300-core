@@ -23,3 +23,10 @@ This is work-in-progress
 - [ ] CI
 - [ ] Documentation
 
+## Examples
+
+### pinetime
+
+```
+cargo run --example pinetime --target thumbv7em-none-eabihf
+```

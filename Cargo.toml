@@ -7,3 +7,12 @@ edition = "2018"
 
 [dependencies]
 embedded-hal = "0.2"
+
+
+[dev-dependencies]
+cortex-m = {version = "0.6.2" }
+cortex-m-rt = "0.6.12"
+embedded-hal = "0.2.3"
+nrf52832-hal = {version = "0.8.1", default-features = false, features = ["xxAA-package", "rt"]}
+panic-rtt-core = "0.1.0"
+shared-bus = {version = "0.1.4", features = ["cortexm"] }
