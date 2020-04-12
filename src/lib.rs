@@ -24,6 +24,7 @@ pub struct HRS3300<I2C> {
     address: u8,
     /// The selected bits of resolution of the ADC
     adc_resolution: AdcResolution,
+    resolution_mask: u32,
 }
 
 type HeartRateType = u16;
@@ -38,8 +39,14 @@ where
     CommE: core::fmt::Debug,
 {
     pub const DEFAULT_DEVICE_ADDRESS: u8 = 0x44;
-    /// recommended value of reserved resolution bits
+    const DEFAULT_DEVICE_ID: u8 = 0x21;
+
+    /// recommended value of reserved RES register bits
     const RESERVED_RESOLUTION_BITS: u8 = 0x60;
+    /// recommended value of reserved ENABLE register bits
+    const RESERVED_ENABLE_BITS: u8 = 0x60;
+    /// recommended value of reserved PDRIVE register bits
+    const RESERVED_PDRIVE_BITS: u8 = 0x08;
 
     fn new(i2c_port: I2C, address: u8, adc_resolution: AdcResolution) -> Self {
         Self {
@@ -60,7 +67,7 @@ where
     pub fn init(&mut self) -> Result<(), Error<CommE>> {
         //first verify we can get a device ID
         let device_id = self.get_device_id()?;
-        if device_id != DEFAULT_DEVICE_ID {
+        if device_id != Self::DEFAULT_DEVICE_ID {
             return Err(DeviceId);
         }
 
@@ -68,24 +75,25 @@ where
         // PDRIVER
         // RES
         // HGAIN
-        // Enable
+        // ENABLE
         //TODO subdivide these raw register configs into finer-grained control
         // we currently set the configuration values according to datasheet recommendations
-        let pdrive_reg_val = 0x68 ; //PDriverRegField::PDRIVE0 as u8 | PDriverRegField::PON as u8;
+
+        let pdrive_reg_val = (PDriverRegField::PDRIVE0 as u8 | PDriverRegField::PON as u8)
+            | Self::RESERVED_PDRIVE_BITS; //0x68  rec
         self.write_register(Register::PDRIVER, pdrive_reg_val)?;
-        self.write_register(Register::RES, 0x66)?;
-        //TODO self.set_adc_resolution(self.adc_resolution)?;
-        self.write_register(Register::HGAIN, 0x10)?;
-        // enable and set conversion time to 12.5 ms
-        let enable_reg_val = (EnableRegField::HEN as u8 | EnableRegField::PDRIVE1 as u8) | 0x60;
+        let resolution_reg_val = (self.adc_resolution as u8) | Self::RESERVED_RESOLUTION_BITS; // 0x66 rec
+        self.write_register(Register::RES, resolution_reg_val)?;
+        self.write_register(Register::HGAIN, 0x10)?; // 0x10 rec
+        let enable_reg_val = (EnableRegField::HEN as u8 | EnableRegField::PDRIVE1 as u8)
+            | Self::RESERVED_ENABLE_BITS;
         self.write_register(Register::ENABLE, enable_reg_val)?;
 
-        // self.enable(true)?;
         Ok(())
     }
 
     pub fn enable(&mut self, enable: bool) -> Result<(), Error<CommE>> {
-        let enable_val = self.read_register(Register::ENABLE)?;
+        let enable_val = Self::RESERVED_ENABLE_BITS;
         let enable_val = if enable {
             enable_val | (EnableRegField::HEN as u8)
         } else {
@@ -93,7 +101,7 @@ where
         };
         self.write_register(Register::ENABLE, enable_val)?;
 
-        let pdrive_val = self.read_register(Register::PDRIVER)?;
+        let pdrive_val = Self::RESERVED_PDRIVE_BITS;
         let pdrive_val = if enable {
             pdrive_val | (PDriverRegField::PON as u8)
         } else {
@@ -111,20 +119,12 @@ where
 
     pub fn set_adc_resolution(&mut self, resolution: AdcResolution) -> Result<(), Error<CommE>> {
         self.adc_resolution = resolution;
+        self.resolution_mask = (1 << (8 + (self.adc_resolution as u32))) - 1;
+
         let res = Self::RESERVED_RESOLUTION_BITS & (resolution as u8);
         // let res = self.read_register(Register::RES)?;
         // let res = (res & 0xF0) | (resolution as u8);
         self.write_register(Register::RES, res)
-    }
-
-    pub fn enable_power(&mut self, enable: bool) -> Result<(), Error<CommE>> {
-        let base = self.read_register(Register::ENABLE)?;
-        let new_val = if enable {
-            base | (EnableRegField::HEN as u8)
-        } else {
-            base & !(EnableRegField::HEN as u8)
-        };
-        self.write_register(Register::ENABLE, new_val)
     }
 
     /// Read a sample from the sensors,
@@ -149,24 +149,27 @@ where
     ) -> Result<(ReflectedLightType, AmbientLightType), Error<CommE>> {
         let block = self.read_sample_block()?;
         // The order of returned data is:
-        // 0: C1DATAM
-        // 1: C0DATAM
-        // 2: C0DATAH
+        // 0: C1DATAM 0x08
+        // 1: C0DATAM 0x09
+        // 2: C0DATAH 0x0A
         // 3: PDRIVER
-        // 4: C1DATAH
-        // 5: C1DATAL
-        // 6: C0DATAL
+        // 4: C1DATAH 0x0D
+        // 5: C1DATAL 0x0E
+        // 6: C0DATAL 0x0F
 
         let mut c1: u32 = (block[0] as u32) << 3; // 7:0 -> C1DATA[10:3]
-        let mut c0: u32 = (block[1] as u32) << 8; // 7:0 -> C0DATA[15:8]
-        c0 |= ((block[2] & 0b1111) as u32) << 4; // 3:0 -> C0DATA[7:4]
-        c1 |= ((block[4] & 0b111111) as u32) << 11; //  6:0 -> C1DATA[17:11]
-        c1 |= (block[5] & 0b111) as u32; // 2:0 -> C1DATA[2:0]
-        c0 |= ((block[6] & 0b110000) as u32) << 16; // 5:4 -> C0DATA[17:16]
-        c0 |= (block[6] & 0b1111) as u32; // 3:0 -> C0DATA[3:0]
-                                          // c0 is HRS reflectance / absorption
-                                          // c1 is ambient light sensor (luminance)
+        c1 |= ((block[4] & 0x3F) as u32) << 11; // 6:0 -> C1DATA[17:11]
+        c1 |= (block[5] & 0x07) as u32; // 2:0 -> C1DATA[2:0]
+        c1 &= self.resolution_mask;
 
+        let mut c0: u32 = (block[1] as u32) << 8; // 7:0 -> C0DATA[15:8]
+        c0 |= ((block[2] & 0x0F) as u32) << 4; // 3:0 -> C0DATA[7:4]
+        c0 |= ((block[6] & 0x30) as u32) << 16; // 5:4 -> C0DATA[17:16]
+        c0 |= (block[6] & 0x0F) as u32; // 3:0 -> C0DATA[3:0]
+        c0 &= self.resolution_mask;
+
+        // c0 is HRS reflectance
+        // c1 is ambient light sensor (luminance)
         Ok((c0 as ReflectedLightType, c1 as AmbientLightType))
     }
 
@@ -210,7 +213,19 @@ where
 
 const SAMPLE_BLOCK_LEN: usize = 7;
 
-const DEFAULT_DEVICE_ID: u8 = 0x21;
+// Sample data when sensor is strapped into charger:
+// (HRS, ALS) :
+// 2, 82746
+// 4, 82746
+// 7, 82730
+// 4, 82738
+// 5, 82674
+// ...
+// 6, 82032
+// 4, 82032
+// 5, 82032
+// 5, 82032
+// 4, 82032
 
 #[cfg(test)]
 mod tests {

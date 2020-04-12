@@ -5,17 +5,17 @@
 //use panic_halt as _; // you can put a breakpoint on `rust_begin_unwind` to catch panics
 use panic_rtt_core::{self, rprintln, rtt_init_print}; // prints panic message to rtt / jlink
 
+use cortex_m_rt as rt;
 use nrf52832_hal as p_hal;
 use p_hal::nrf52832_pac as pac;
 use p_hal::{clocks::ClocksExt, gpio::GpioExt};
 use p_hal::{delay::Delay, twim};
 
-use cortex_m_rt as rt;
-
 use hrs3300_core::HRS3300;
 use rt::entry;
 
 use embedded_hal::blocking::delay::DelayMs;
+use embedded_hal::digital::v2::InputPin;
 
 #[entry]
 fn main() -> ! {
@@ -31,6 +31,15 @@ fn main() -> ! {
     let port0 = dp.P0.split();
 
     rprintln!("\r\n--- BEGIN ---");
+
+    // P0.12: when this pin is low, it indicates the battery is charging
+    let charging_pin = port0.p0_12.into_floating_input();
+    // P0.19: power presence? when this line is low, there's power connected
+    let power_pin = port0.p0_19.into_floating_input();
+    let is_charging = charging_pin.is_low().unwrap_or(false);
+    let is_powered = power_pin.is_low().unwrap_or(false);
+
+    rprintln!("power: {} charging: {}", is_powered, is_charging);
 
     // internal i2c0 bus devices: BMA421 (accel), HRS3300 (hrs), CST816S (TouchPad)
     // BMA421-INT:  P0.08
